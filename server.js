@@ -36,9 +36,14 @@ app.use('/api/chats', chatRouter);
 app.use('/api/voice', voiceRouter);
 app.use('/api/image', imageRouter);
 
-// Health check endpoint
+// Health check & Wakeup endpoints for UptimeRobot
 app.get('/api/health', (req, res) => {
   res.json({ status: 'healthy', database: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected' });
+});
+
+// Dedicated lightweight wakeup ping for UptimeRobot (both /api/wakeup and /ping)
+app.get(['/api/wakeup', '/ping', '/'], (req, res) => {
+  res.status(200).send('Nexa AI Backend is active and awake!');
 });
 
 // Start listener server
