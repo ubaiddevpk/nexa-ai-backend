@@ -26,23 +26,30 @@ router.post('/transcribe', upload.single('audio'), async (req, res) => {
     const audioBuffer = fs.readFileSync(tempFilePath);
     const base64Audio = audioBuffer.toString('base64');
 
-    console.log('Sending audio to Gemini for transcription...');
+    // Helper to get GoogleGenAI client (using custom user key if provided, else system default)
+    const customApiKey = req.headers['x-gemini-api-key'];
+    const client = customApiKey
+      ? new GoogleGenAI({ apiKey: customApiKey })
+      : ai;
+
+    const mimeType = req.file.mimetype || 'audio/webm';
+    console.log(`Sending audio (${audioBuffer.length} bytes, ${mimeType}) to Gemini for transcription...`);
     
     // Call Gemini with the audio data and a prompt to transcribe it
-    const response = await ai.models.generateContent({
+    const response = await client.models.generateContent({
       model: 'gemini-flash-latest',
       contents: [
         {
           inlineData: {
-            mimeType: req.file.mimetype || 'audio/webm',
+            mimeType: mimeType,
             data: base64Audio
           }
         },
-        { text: 'Please transcribe this audio recording into clear text. Do not add any introductory or concluding comments. Just output the transcribed text.' }
+        { text: 'Transcribe the spoken words in this audio into plain text accurately. Output only the transcribed text, without markdown quotes or explanations.' }
       ]
     });
 
-    const transcribedText = response.text || '';
+    const transcribedText = (response.text || '').trim();
     console.log(`Transcribed text: "${transcribedText}"`);
     res.json({ text: transcribedText });
   } catch (error) {
