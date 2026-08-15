@@ -115,6 +115,36 @@ router.delete('/:id', async (req, res) => {
   }
 });
 
+// ─── Retry helper: exponential backoff for transient Gemini API failures ──────
+async function callGeminiWithRetry(client, payload, maxRetries = 3) {
+  let lastError;
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      const response = await client.models.generateContent(payload);
+      return response;
+    } catch (err) {
+      lastError = err;
+      const msg = err.message || '';
+      const isRetryable =
+        msg.includes('503') ||
+        msg.includes('UNAVAILABLE') ||
+        msg.includes('overloaded') ||
+        msg.includes('high demand') ||
+        msg.includes('rate') ||
+        msg.includes('429');
+
+      if (isRetryable && attempt < maxRetries) {
+        const delayMs = attempt * 1500; // 1.5s, 3s, 4.5s
+        console.warn(`Gemini API overloaded (attempt ${attempt}/${maxRetries}). Retrying in ${delayMs}ms...`);
+        await new Promise(r => setTimeout(r, delayMs));
+      } else {
+        throw err;
+      }
+    }
+  }
+  throw lastError;
+}
+
 // 5. Send message & generate AI response with PDF context
 router.post('/:id/messages', async (req, res) => {
   try {
@@ -154,13 +184,11 @@ router.post('/:id/messages', async (req, res) => {
       ? new GoogleGenAI({ apiKey: customApiKey })
       : ai;
 
-    // Generate assistant completion via Gemini
-    const response = await client.models.generateContent({
+    // Generate assistant completion via Gemini — with automatic retry on overload
+    const response = await callGeminiWithRetry(client, {
       model: 'gemini-flash-latest',
       contents: apiMessages,
-      config: {
-        systemInstruction: systemPrompt
-      }
+      config: { systemInstruction: systemPrompt }
     });
 
     const assistantContent = response.text;
@@ -190,6 +218,20 @@ router.post('/:id/messages', async (req, res) => {
     res.status(200).json(chat);
   } catch (error) {
     console.error('Error in /messages route:', error);
+
+    // Return a user-friendly message for overload errors
+    const msg = error.message || '';
+    if (msg.includes('503') || msg.includes('UNAVAILABLE') || msg.includes('overloaded') || msg.includes('high demand')) {
+      return res.status(503).json({ 
+        error: 'Gemini AI is temporarily overloaded. Please wait a moment and try again.' 
+      });
+    }
+    if (msg.includes('429') || msg.includes('rate')) {
+      return res.status(429).json({ 
+        error: 'Rate limit reached. Please wait a few seconds before sending another message.' 
+      });
+    }
+
     res.status(500).json({ error: error.message });
   }
 });
